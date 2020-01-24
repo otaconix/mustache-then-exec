@@ -54,12 +54,29 @@ ENTRYPOINT [ "/mustache-then-exec", "/etc/nginx/*.conf", "--", "/usr/sbin/nginx"
 CMD [ "-g", "daemon off;" ]
 ```
 
-Which you can now run as follows (depending on how you tagged your image during
-`docker build`):
+Which you can now run as follows (image name depending on how you tagged your
+image during `docker build`):
 
-```shell-session
-$ docker run --rm -d --name nginx-proxy -e NGINX_PROXY_UPSTREAM=https://httpbin.org mustache-then-exec-nginx-proxy
-$ docker exec nginx-proxy pstree -p
+```shellsession
+$ docker run --rm -p 80:80 mustache-then-exec-nginx-proxy
+Filling template: /etc/nginx/fastcgi.conf
+Filling template: /etc/nginx/nginx.conf
+Error: Missing variable "NGINX_PROXY_UPSTREAM"
+$ docker run --rm -d -p 80:80 -e NGINX_PROXY_UPSTREAM=https://httpbin.org/get mustache-then-exec-nginx-proxy
+f3a67fa793821c3815997cfcc78a6619a01836f3c61380606922c6bf779ab30d
+$ docker exec f3a67fa793821c3815997cfcc78a6619a01836f3c61380606922c6bf779ab30d pstree -p
 nginx(1)---nginx(11)
-$ docker kill nginx-proxy
+$ curl http://localhost:80/get
+curl http://localhost:80
+{
+  "args": {}, 
+  "headers": {
+    "Accept": "*/*", 
+    "Host": "httpbin.org", 
+    "User-Agent": "curl/7.68.0",
+  }, 
+  "origin": "1.1.1.1", 
+  "url": "https://httpbin.org/get"
+}
+$ docker kill f3a67fa793821c3815997cfcc78a6619a01836f3c61380606922c6bf779ab30d
 ```
