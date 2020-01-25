@@ -55,16 +55,6 @@ func renderTemplate(template string, environment map[string]string) error {
 	return nil
 }
 
-func splitArgs(args []string) ([]string, []string) {
-	for i, v := range args {
-		if v == "--" {
-			return args[:i], args[i+1:]
-		}
-	}
-
-	return args[:], []string{}
-}
-
 func parseArgs() args {
 	var args args
 	arg.MustParse(&args)
