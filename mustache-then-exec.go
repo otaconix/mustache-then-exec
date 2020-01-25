@@ -1,8 +1,8 @@
 package main
 
 import (
-	"flag"
 	"fmt"
+	arg "github.com/alexflint/go-arg"
 	"github.com/cbroglie/mustache"
 	"io/ioutil"
 	"os"
@@ -11,13 +11,21 @@ import (
 	"syscall"
 )
 
+type args struct {
+	AllowMissing  bool     `arg:"-a,--allow-missing" help:"whether to allow missing variables (default: false)"`
+	Templates     []string `arg:"-t,--template,separate" placeholder:"TEMPLATE" help:"path to a template to be rendered"`
+	GlobTemplates []string `arg:"-g,--glob-template,separate" placeholder:"GLOB" help:"glob for templates to be rendered"`
+	Binary        string   `arg:"positional,required" placeholder:"BINARY" help:"the binary to run after rendering the templates"`
+	Args          []string `arg:"positional" placeholder:"ARG" help:"arguments to the binary to run after rendering the templates"`
+}
+
 func fail(format string, args ...interface{}) {
 	fmt.Fprintf(os.Stderr, "Error: "+format+"\n", args...)
 	os.Exit(1)
 }
 
 func failErr(err error) {
-    fail("%s", err)
+	fail("%s", err)
 }
 
 func environmentAsMap() map[string]string {
@@ -57,50 +65,40 @@ func splitArgs(args []string) ([]string, []string) {
 	return args[:], []string{}
 }
 
-func parseArgs() {
-	flag.Usage = func() {
-		fmt.Fprintf(flag.CommandLine.Output(), "Usage:\n  %s [--allow-missing] [TEMPLATE...] -- BINARY [ARGUMENTS...]\n", os.Args[0])
-		fmt.Fprintf(flag.CommandLine.Output(),
-			"\n  Replaces TEMPLATE files (which are Go globs) with their contents\n"+
-				"  rendered as a Mustache template, where the environment variables are\n"+
-				"  passed as data to those tempales.\n\n")
-		flag.PrintDefaults()
-	}
-	allowMissing := flag.Bool("allow-missing", false, "Whether to allow missing variables (default: false).")
+func parseArgs() args {
+	var args args
+	arg.MustParse(&args)
 
-	flag.Parse()
+	mustache.AllowMissingVariables = args.AllowMissing
 
-	mustache.AllowMissingVariables = *allowMissing
+	return args
 }
 
 func main() {
-	parseArgs()
-
-	templateGlobs, execArgs := splitArgs(flag.Args())
-
-	if len(execArgs) == 0 {
-		fail("No binary to execute provided")
-	}
+	args := parseArgs()
 
 	environment := environmentAsMap()
 
-	for _, templateGlob := range templateGlobs {
+	matchedFiles := []string{}
+	for _, templateGlob := range args.GlobTemplates {
 		templates, err := filepath.Glob(templateGlob)
 		if err != nil {
 			failErr(err)
 		}
-		for _, template := range templates {
-			err := renderTemplate(template, environment)
-			if err != nil {
-				failErr(err)
-			}
+
+		matchedFiles = append(matchedFiles, templates...)
+	}
+
+	for _, template := range append(args.Templates, matchedFiles...) {
+		err := renderTemplate(template, environment)
+		if err != nil {
+			failErr(err)
 		}
 	}
 
-	if len(execArgs) > 0 {
-		err := syscall.Exec(execArgs[0], execArgs, os.Environ())
-		if err != nil {
-			fail("Error running %s: %s", execArgs[0], err)
-		}
+	argv := append([]string{args.Binary}, args.Args...)
+	err := syscall.Exec(args.Binary, argv, os.Environ())
+	if err != nil {
+		fail("Error running %s: %s", argv, err)
 	}
 }
