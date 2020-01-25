@@ -7,9 +7,16 @@ import (
 	"io/ioutil"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"syscall"
 )
+
+type template struct {
+	source      string
+	regex       *regexp.Regexp
+	replacement string
+}
 
 type args struct {
 	AllowMissing  bool     `arg:"-a,--allow-missing" help:"whether to allow missing variables (default: false)"`
@@ -39,15 +46,24 @@ func environmentAsMap() map[string]string {
 	return envMap
 }
 
-func renderTemplate(template string, environment map[string]string) error {
-	fmt.Printf("Filling template: %s\n", template)
+func renderTemplate(template template, environment map[string]string) error {
+	outputFileName := template.source
+	if template.regex != nil {
+		outputFileName = template.regex.ReplaceAllString(template.source, template.replacement)
+	}
+	fmt.Printf("Rendering template: %s; output: %s\n", template.source, outputFileName)
 
-	renderedTemplate, err := mustache.RenderFile(template, environment)
+	renderedTemplate, err := mustache.RenderFile(template.source, environment)
 	if err != nil {
 		return err
 	}
 
-	err = ioutil.WriteFile(template, []byte(renderedTemplate), 0)
+	fileInfo, err := os.Stat(template.source)
+	if err != nil {
+		return err
+	}
+
+	err = ioutil.WriteFile(outputFileName, []byte(renderedTemplate), fileInfo.Mode())
 	if err != nil {
 		return err
 	}
@@ -64,22 +80,76 @@ func parseArgs() args {
 	return args
 }
 
+func parseTemplate(templateFileName string) template {
+	currentString := []rune{}
+	splits := []string{}
+	isEscaped := false
+
+	for _, c := range templateFileName {
+		if c == '\\' {
+			isEscaped = true
+			currentString = append(currentString[:], c)
+		} else if c == ':' {
+			if isEscaped {
+				currentString = append(currentString[0:len(currentString)-1], c)
+			} else {
+				splits = append(splits, string(currentString))
+				currentString = []rune{}
+			}
+			isEscaped = false
+		} else {
+			currentString = append(currentString, c)
+			isEscaped = false
+		}
+	}
+
+	splits = append(splits, string(currentString))
+
+	if len(splits) == 1 {
+		return template{source: splits[0]}
+	} else if len(splits) != 3 {
+		fail("Template '%s' is invalid (have you escaped colons properly?)", templateFileName)
+	}
+
+	regex, err := regexp.Compile(splits[1])
+	if err != nil {
+		failErr(err)
+	}
+
+	return template{
+		source:      splits[0],
+		regex:       regex,
+		replacement: splits[2],
+	}
+}
+
 func main() {
 	args := parseArgs()
 
 	environment := environmentAsMap()
 
-	matchedFiles := []string{}
+	templates := []template{}
 	for _, templateGlob := range args.GlobTemplates {
-		templates, err := filepath.Glob(templateGlob)
+		parsedTemplateGlob := parseTemplate(templateGlob)
+		matchingTemplateFileNames, err := filepath.Glob(parsedTemplateGlob.source)
 		if err != nil {
 			failErr(err)
 		}
 
-		matchedFiles = append(matchedFiles, templates...)
+		for _, matchingTemplateFileName := range matchingTemplateFileNames {
+			templates = append(templates, template{
+				source:      matchingTemplateFileName,
+				regex:       parsedTemplateGlob.regex,
+				replacement: parsedTemplateGlob.replacement,
+			})
+		}
 	}
 
-	for _, template := range append(args.Templates, matchedFiles...) {
+	for _, template := range args.Templates {
+		templates = append(templates, parseTemplate(template))
+	}
+
+	for _, template := range templates {
 		err := renderTemplate(template, environment)
 		if err != nil {
 			failErr(err)
